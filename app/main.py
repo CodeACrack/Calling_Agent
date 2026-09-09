@@ -34,8 +34,9 @@ async def incoming_call(request: Request, x_vobiz_secret: str | None = Header(de
     ):
         raise HTTPException(status_code=401, detail="Invalid Vobiz webhook secret")
 
+    event = dict(request.query_params)
     form = await request.form()
-    event = dict(form)
+    event.update(dict(form))
     if not event:
         try:
             event = await request.json()
