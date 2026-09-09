@@ -139,7 +139,9 @@ async def vobiz_media(vobiz: WebSocket):
                         inbound_sample_rate = int(media_format.get("sampleRate") or 8000)
                         log.info("Vobiz stream started: call=%s stream=%s format=%s/%s", call_id, stream_id, inbound_encoding, inbound_sample_rate)
                         recorder = CallRecorder(call_id)
-                        await gemini.send_realtime_input(text="Greet the caller now and ask how you can help.")
+                        await gemini.send_realtime_input(
+                            text="Say only the required first-turn greeting from your instructions, then stop speaking and wait for the caller."
+                        )
                     if message.get("event") == "media":
                         payload = message.get("media", {}).get("payload")
                         if payload:
