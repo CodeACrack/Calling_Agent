@@ -25,7 +25,7 @@ def health():
     return {"status": "ok", "live_calls_ready": bool(settings.openai_api_key)}
 
 
-@app.post("/vobiz/incoming")
+@app.api_route("/vobiz/incoming", methods=["GET", "POST"])
 async def incoming_call(request: Request, x_vobiz_secret: str | None = Header(default=None)):
     """Return VobizXML that starts the bidirectional media stream."""
     settings = get_settings()
