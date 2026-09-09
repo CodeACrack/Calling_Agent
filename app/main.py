@@ -7,7 +7,7 @@ from contextlib import suppress
 
 import websockets
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .agent import session_update
 from .config import get_settings
@@ -27,25 +27,28 @@ def health():
 
 @app.post("/vobiz/incoming")
 async def incoming_call(request: Request, x_vobiz_secret: str | None = Header(default=None)):
-    """Inbound webhook endpoint. Configure this as Vobiz's call-answer URL when available."""
+    """Return VobizXML that starts the bidirectional media stream."""
     settings = get_settings()
     if settings.vobiz_webhook_secret and not secrets.compare_digest(
         x_vobiz_secret or "", settings.vobiz_webhook_secret
     ):
         raise HTTPException(status_code=401, detail="Invalid Vobiz webhook secret")
 
-    event = await request.json()
-    call_id = event.get("call_id") or event.get("uuid") or "unknown"
+    form = await request.form()
+    event = dict(form)
+    if not event:
+        try:
+            event = await request.json()
+        except Exception:
+            event = {}
+    call_id = event.get("CallUUID") or event.get("call_id") or event.get("uuid") or "unknown"
     log.info("Inbound call notification: %s", call_id)
-    # Vobiz's exact answer schema must be inserted here after its media-stream feature
-    # is enabled. This deliberately does not pretend that a generic JSON response will
-    # control a real carrier call.
-    return JSONResponse({
-        "status": "received",
-        "call_id": call_id,
-        "media_websocket": f"{settings.public_base_url.rstrip('/')}/vobiz/media",
-        "setup_required": "Map this value to Vobiz's documented media-stream/SIP answer field.",
-    })
+    websocket_url = f"{settings.public_base_url.rstrip('/')}/vobiz/media"
+    xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">{websocket_url}</Stream>
+</Response>'''
+    return Response(content=xml, media_type="application/xml")
 
 
 @app.websocket("/vobiz/media")
@@ -65,17 +68,20 @@ async def vobiz_media(vobiz: WebSocket):
     realtime_url = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
     headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
     call_id = "unknown"
+    stream_id = "unknown"
     recorder: CallRecorder | None = None
     try:
         async with websockets.connect(realtime_url, additional_headers=headers) as openai:
             await openai.send(json.dumps(session_update(settings)))
 
             async def carrier_to_openai():
-                nonlocal call_id, recorder
+                nonlocal call_id, stream_id, recorder
                 async for raw in vobiz.iter_text():
                     message = json.loads(raw)
                     if message.get("event") == "start":
-                        call_id = str(message.get("start", {}).get("call_id") or message.get("call_id") or "unknown")
+                        start = message.get("start", {})
+                        call_id = str(start.get("callId") or start.get("call_id") or message.get("call_id") or "unknown")
+                        stream_id = str(start.get("streamId") or message.get("streamId") or "unknown")
                         recorder = CallRecorder(call_id)
                     if message.get("event") == "media":
                         payload = message.get("media", {}).get("payload")
@@ -85,8 +91,6 @@ async def vobiz_media(vobiz: WebSocket):
                             await openai.send(json.dumps({
                                 "type": "input_audio_buffer.append", "audio": payload
                             }))
-                    elif message.get("event") in {"stop", "hangup"}:
-                        break
 
             async def openai_to_carrier():
                 async for raw in openai:
@@ -95,7 +99,13 @@ async def vobiz_media(vobiz: WebSocket):
                         if recorder:
                             recorder.write_pcmu(event["delta"], "assistant")
                         await vobiz.send_json({
-                            "event": "media", "media": {"payload": event["delta"]}
+                            "event": "playAudio",
+                            "streamId": stream_id,
+                            "media": {
+                                "contentType": "audio/x-mulaw",
+                                "sampleRate": 8000,
+                                "payload": event["delta"],
+                            },
                         })
                     elif event.get("type") == "error":
                         log.error("Realtime error: %s", event)
