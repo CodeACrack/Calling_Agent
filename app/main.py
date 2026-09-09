@@ -87,6 +87,7 @@ async def incoming_call(request: Request, x_vobiz_secret: str | None = Header(de
     websocket_url = f"{websocket_base_url}/vobiz/media"
     xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+    <Speak voice="WOMAN" language="en-IN">Hello, I am Pujitha's AI assistant. She is unavailable to take calls right now. This call is being recorded and the recording will be sent to her. What is the purpose of your call?</Speak>
   <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">{websocket_url}</Stream>
 </Response>'''
     return Response(content=xml, media_type="application/xml")
@@ -139,9 +140,6 @@ async def vobiz_media(vobiz: WebSocket):
                         inbound_sample_rate = int(media_format.get("sampleRate") or 8000)
                         log.info("Vobiz stream started: call=%s stream=%s format=%s/%s", call_id, stream_id, inbound_encoding, inbound_sample_rate)
                         recorder = CallRecorder(call_id)
-                        await gemini.send_realtime_input(
-                            text="Say only the required first-turn greeting from your instructions, then stop speaking and wait for the caller."
-                        )
                     if message.get("event") == "media":
                         payload = message.get("media", {}).get("payload")
                         if payload:
