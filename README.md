@@ -39,6 +39,28 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Confirm the service with `http://localhost:8000/health`. For live carrier traffic, use a production host with HTTPS/WSS and keep `VOBIZ_WEBHOOK_SECRET` set if Vobiz can send a custom header.
 
+## Deploy with Render using Docker
+
+1. Push this project to a private GitHub repository. Do not commit `.env`, API keys, `.venv`, logs, or recordings.
+2. In Render, choose **New > Web Service**, connect the repository, and select **Docker** as the runtime.
+3. Leave the Dockerfile path as `./Dockerfile`. Render supplies the `PORT` environment variable used by the container.
+4. Add the variables from `.env` in Render's Environment settings. Set `PUBLIC_BASE_URL` to `https://calling-agent.onrender.com`.
+5. After deployment, verify `https://calling-agent.onrender.com/health`.
+
+Configure Vobiz with this webhook URL:
+
+```text
+https://calling-agent.onrender.com/vobiz/incoming
+```
+
+The media-stream URL returned by the webhook is:
+
+```text
+wss://calling-agent.onrender.com/vobiz/media
+```
+
+Render must run this as a Web Service, not a Static Site or Background Worker, because Vobiz needs HTTPS and WebSocket access.
+
 ## Customize it
 
 - Change business identity and voice in `.env`.
