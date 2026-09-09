@@ -1,18 +1,23 @@
 """Provider-neutral media bridge. Adapt `vobiz_media` once Vobiz media-stream details are enabled."""
 import asyncio
+import audioop
+import base64
 import json
 import logging
 import secrets
 from contextlib import suppress
+from pathlib import Path
 
-import websockets
+from google import genai
+from google.genai import types
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
-from .agent import session_update
+from .agent import instructions
 from .config import get_settings
 from .recording import CallRecorder
-from .whatsapp import send_recording
+
+RECORDINGS_DIR = Path("data/recordings")
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("calling-agent")
@@ -22,7 +27,16 @@ app = FastAPI(title="Vobiz AI Calling Agent", version="0.1.0")
 @app.get("/health")
 def health():
     settings = get_settings()
-    return {"status": "ok", "live_calls_ready": bool(settings.openai_api_key)}
+    return {"status": "ok", "live_calls_ready": bool(settings.gemini_api_key)}
+
+
+@app.get("/recordings/{filename}")
+def recording(filename: str):
+    path = (RECORDINGS_DIR / Path(filename).name).resolve()
+    recordings_root = RECORDINGS_DIR.resolve()
+    if path.parent != recordings_root or not path.is_file():
+        raise HTTPException(status_code=404, detail="Recording not found")
+    return FileResponse(path, media_type="audio/wav", filename=path.name)
 
 
 @app.api_route("/vobiz/hangup", methods=["GET", "POST"])
@@ -87,19 +101,26 @@ async def vobiz_media(vobiz: WebSocket):
     """
     await vobiz.accept()
     settings = get_settings()
-    if not settings.openai_api_key:
-        await vobiz.send_json({"event": "error", "message": "OPENAI_API_KEY is not configured"})
+    if not settings.gemini_api_key:
+        await vobiz.send_json({"event": "error", "message": "GEMINI_API_KEY is not configured"})
         await vobiz.close(code=1011)
         return
 
-    realtime_url = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
-    headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+    client = genai.Client(api_key=settings.gemini_api_key)
     call_id = "unknown"
     stream_id = "unknown"
     recorder: CallRecorder | None = None
     try:
-        async with websockets.connect(realtime_url, additional_headers=headers) as openai:
-            await openai.send(json.dumps(session_update(settings)))
+        live_config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=instructions(settings),
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
+                )
+            ),
+        )
+        async with client.aio.live.connect(model="gemini-3.1-flash-live-preview", config=live_config) as gemini:
 
             async def carrier_to_openai():
                 nonlocal call_id, stream_id, recorder
@@ -110,38 +131,42 @@ async def vobiz_media(vobiz: WebSocket):
                         call_id = str(start.get("callId") or start.get("call_id") or message.get("call_id") or "unknown")
                         stream_id = str(start.get("streamId") or message.get("streamId") or "unknown")
                         recorder = CallRecorder(call_id)
-                        await openai.send(json.dumps({
-                            "type": "response.create",
-                            "response": {"instructions": "Greet the caller now and ask how you can help."},
-                        }))
+                        await gemini.send_realtime_input(text="Greet the caller now and ask how you can help.")
                     if message.get("event") == "media":
                         payload = message.get("media", {}).get("payload")
                         if payload:
                             if recorder:
                                 recorder.write_pcmu(payload, "caller")
-                            await openai.send(json.dumps({
-                                "type": "input_audio_buffer.append", "audio": payload
-                            }))
+                            pcm_8k = audioop.ulaw2lin(base64.b64decode(payload), 2)
+                            pcm_16k, _ = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, None)
+                            await gemini.send_realtime_input(
+                                audio=types.Blob(data=pcm_16k, mime_type="audio/pcm;rate=16000")
+                            )
 
-            async def openai_to_carrier():
-                async for raw in openai:
-                    event = json.loads(raw)
-                    if event.get("type") == "response.output_audio.delta":
-                        if recorder:
-                            recorder.write_pcmu(event["delta"], "assistant")
-                        await vobiz.send_json({
-                            "event": "playAudio",
-                            "streamId": stream_id,
-                            "media": {
-                                "contentType": "audio/x-mulaw",
-                                "sampleRate": 8000,
-                                "payload": event["delta"],
-                            },
-                        })
-                    elif event.get("type") == "error":
-                        log.error("Realtime error: %s", event)
+            async def gemini_to_carrier():
+                async for response in gemini.receive():
+                    server_content = response.server_content
+                    if not server_content or not server_content.model_turn:
+                        continue
+                    for part in server_content.model_turn.parts or []:
+                        if part.inline_data and part.inline_data.data:
+                            pcm_24k = part.inline_data.data
+                            pcm_8k, _ = audioop.ratecv(pcm_24k, 2, 1, 24000, 8000, None)
+                            audio_payload = base64.b64encode(audioop.lin2ulaw(pcm_8k, 2)).decode()
+                            if recorder:
+                                recorder.write_pcmu(audio_payload, "assistant")
+                            
+                            await vobiz.send_json({
+                                "event": "playAudio",
+                                "streamId": stream_id,
+                                "media": {
+                                    "contentType": "audio/x-mulaw",
+                                    "sampleRate": 8000,
+                                    "payload": audio_payload,
+                                },
+                            })
 
-            tasks = [asyncio.create_task(carrier_to_openai()), asyncio.create_task(openai_to_carrier())]
+            tasks = [asyncio.create_task(carrier_to_openai()), asyncio.create_task(gemini_to_carrier())]
             _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
@@ -159,8 +184,4 @@ async def vobiz_media(vobiz: WebSocket):
     finally:
         if recorder:
             recording = recorder.close()
-            try:
-                delivered = await send_recording(settings, recording, call_id)
-                log.info("Recording %s for call %s", "sent to WhatsApp" if delivered else "saved locally", call_id)
-            except Exception:
-                log.exception("Could not send recording to WhatsApp; saved locally: %s", recording)
+            log.info("Recording saved locally for call %s: %s", call_id, recording)
