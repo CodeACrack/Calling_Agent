@@ -65,7 +65,12 @@ async def incoming_call(request: Request, x_vobiz_secret: str | None = Header(de
             event = {}
     call_id = event.get("CallUUID") or event.get("call_id") or event.get("uuid") or "unknown"
     log.info("Inbound call notification: %s", call_id)
-    websocket_url = f"{settings.public_base_url.rstrip('/')}/vobiz/media"
+    websocket_base_url = settings.public_base_url.rstrip("/")
+    if websocket_base_url.startswith("https://"):
+        websocket_base_url = "wss://" + websocket_base_url.removeprefix("https://")
+    elif websocket_base_url.startswith("http://"):
+        websocket_base_url = "ws://" + websocket_base_url.removeprefix("http://")
+    websocket_url = f"{websocket_base_url}/vobiz/media"
     xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">{websocket_url}</Stream>
