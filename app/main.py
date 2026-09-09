@@ -83,6 +83,10 @@ async def vobiz_media(vobiz: WebSocket):
                         call_id = str(start.get("callId") or start.get("call_id") or message.get("call_id") or "unknown")
                         stream_id = str(start.get("streamId") or message.get("streamId") or "unknown")
                         recorder = CallRecorder(call_id)
+                        await openai.send(json.dumps({
+                            "type": "response.create",
+                            "response": {"instructions": "Greet the caller now and ask how you can help."},
+                        }))
                     if message.get("event") == "media":
                         payload = message.get("media", {}).get("payload")
                         if payload:
