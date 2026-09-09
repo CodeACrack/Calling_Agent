@@ -25,6 +25,27 @@ def health():
     return {"status": "ok", "live_calls_ready": bool(settings.openai_api_key)}
 
 
+@app.api_route("/vobiz/hangup", methods=["GET", "POST"])
+async def hangup_callback(request: Request):
+    """Acknowledge Vobiz call-end callbacks without starting another call flow."""
+    event = dict(request.query_params)
+    if request.method == "POST":
+        event.update(dict(await request.form()))
+    log.info("Vobiz call ended: %s", event.get("CallUUID") or event.get("call_id") or "unknown")
+    return Response(content="OK", media_type="text/plain")
+
+
+@app.api_route("/vobiz/fallback", methods=["GET", "POST"])
+async def fallback_callback():
+    """Return a simple fallback response when Vobiz cannot execute the application."""
+    xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Speak>We are unable to connect your call right now. Please try again later.</Speak>
+  <Hangup/>
+</Response>'''
+    return Response(content=xml, media_type="application/xml")
+
+
 @app.api_route("/vobiz/incoming", methods=["GET", "POST"])
 async def incoming_call(request: Request, x_vobiz_secret: str | None = Header(default=None)):
     """Return VobizXML that starts the bidirectional media stream."""
