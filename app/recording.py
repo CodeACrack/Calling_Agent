@@ -1,4 +1,5 @@
 import base64
+import audioop
 import secrets
 import wave
 from datetime import datetime, timezone
@@ -25,7 +26,16 @@ class CallRecorder:
         self._wav.setframerate(8000)
 
     def write_pcmu(self, payload: str, channel: str) -> None:
-        mono = self._ulaw_to_pcm16(base64.b64decode(payload))
+        self.write_encoded(payload, channel, "audio/x-mulaw", 8000)
+
+    def write_encoded(self, payload: str, channel: str, encoding: str, sample_rate: int) -> None:
+        encoded = base64.b64decode(payload)
+        if "alaw" in encoding.lower():
+            mono = audioop.alaw2lin(encoded, 2)
+        else:
+            mono = audioop.ulaw2lin(encoded, 2)
+        if sample_rate != 8000:
+            mono, _ = audioop.ratecv(mono, 2, 1, sample_rate, 8000, None)
         silence = b"\x00\x00" * (len(mono) // 2)
         frame = self._interleave(mono, silence) if channel == "caller" else self._interleave(silence, mono)
         self._wav.writeframesraw(frame)

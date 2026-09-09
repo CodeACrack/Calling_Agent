@@ -109,6 +109,10 @@ async def vobiz_media(vobiz: WebSocket):
     client = genai.Client(api_key=settings.gemini_api_key)
     call_id = "unknown"
     stream_id = "unknown"
+    inbound_encoding = "audio/x-mulaw"
+    inbound_sample_rate = 8000
+    media_frames = 0
+    response_audio_chunks = 0
     recorder: CallRecorder | None = None
     try:
         live_config = types.LiveConnectConfig(
@@ -123,33 +127,44 @@ async def vobiz_media(vobiz: WebSocket):
         async with client.aio.live.connect(model="gemini-3.1-flash-live-preview", config=live_config) as gemini:
 
             async def carrier_to_openai():
-                nonlocal call_id, stream_id, recorder
+                nonlocal call_id, stream_id, inbound_encoding, inbound_sample_rate, media_frames, recorder
                 async for raw in vobiz.iter_text():
                     message = json.loads(raw)
                     if message.get("event") == "start":
                         start = message.get("start", {})
                         call_id = str(start.get("callId") or start.get("call_id") or message.get("call_id") or "unknown")
                         stream_id = str(start.get("streamId") or message.get("streamId") or "unknown")
+                        media_format = start.get("mediaFormat", {})
+                        inbound_encoding = str(media_format.get("encoding") or media_format.get("contentType") or inbound_encoding)
+                        inbound_sample_rate = int(media_format.get("sampleRate") or 8000)
+                        log.info("Vobiz stream started: call=%s stream=%s format=%s/%s", call_id, stream_id, inbound_encoding, inbound_sample_rate)
                         recorder = CallRecorder(call_id)
                         await gemini.send_realtime_input(text="Greet the caller now and ask how you can help.")
                     if message.get("event") == "media":
                         payload = message.get("media", {}).get("payload")
                         if payload:
+                            media_frames += 1
                             if recorder:
-                                recorder.write_pcmu(payload, "caller")
-                            pcm_8k = audioop.ulaw2lin(base64.b64decode(payload), 2)
-                            pcm_16k, _ = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, None)
+                                recorder.write_encoded(payload, "caller", inbound_encoding, inbound_sample_rate)
+                            encoded = base64.b64decode(payload)
+                            if "alaw" in inbound_encoding.lower():
+                                pcm = audioop.alaw2lin(encoded, 2)
+                            else:
+                                pcm = audioop.ulaw2lin(encoded, 2)
+                            pcm_16k, _ = audioop.ratecv(pcm, 2, 1, inbound_sample_rate, 16000, None)
                             await gemini.send_realtime_input(
                                 audio=types.Blob(data=pcm_16k, mime_type="audio/pcm;rate=16000")
                             )
 
             async def gemini_to_carrier():
+                nonlocal response_audio_chunks
                 async for response in gemini.receive():
                     server_content = response.server_content
                     if not server_content or not server_content.model_turn:
                         continue
                     for part in server_content.model_turn.parts or []:
                         if part.inline_data and part.inline_data.data:
+                            response_audio_chunks += 1
                             pcm_24k = part.inline_data.data
                             pcm_8k, _ = audioop.ratecv(pcm_24k, 2, 1, 24000, 8000, None)
                             audio_payload = base64.b64encode(audioop.lin2ulaw(pcm_8k, 2)).decode()
@@ -173,6 +188,7 @@ async def vobiz_media(vobiz: WebSocket):
             for task in pending:
                 with suppress(asyncio.CancelledError):
                     await task
+            log.info("Vobiz media ended: call=%s inbound_frames=%s outbound_audio_chunks=%s", call_id, media_frames, response_audio_chunks)
     except WebSocketDisconnect:
         pass
     except Exception:
