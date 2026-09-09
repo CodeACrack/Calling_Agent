@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+app/__init__.py
+app/agent.py
+app/config.py
+app/main.py
+app/recording.py
+app/whatsapp.py
+vobiz_ai_calling_agent.egg-info/PKG-INFO
+vobiz_ai_calling_agent.egg-info/SOURCES.txt
+vobiz_ai_calling_agent.egg-info/dependency_links.txt
+vobiz_ai_calling_agent.egg-info/requires.txt
+vobiz_ai_calling_agent.egg-info/top_level.txt
