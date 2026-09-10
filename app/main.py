@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from .agent import instructions
 from .config import get_settings
 from .recording import CallRecorder
+from .whatsapp import send_call_message
 
 RECORDINGS_DIR = Path("data/recordings")
 
@@ -201,3 +202,11 @@ async def vobiz_media(vobiz: WebSocket):
         if recorder:
             recording = recorder.close()
             log.info("Recording saved locally for call %s: %s", call_id, recording)
+            try:
+                sent = await send_call_message(settings, call_id)
+                if sent:
+                    log.info("WhatsApp notification sent for call %s", call_id)
+                else:
+                    log.info("WhatsApp is not configured; notification not sent for call %s", call_id)
+            except Exception:
+                log.exception("Could not send WhatsApp notification for call %s", call_id)
