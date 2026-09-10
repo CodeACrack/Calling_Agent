@@ -20,5 +20,13 @@ async def send_call_message(settings: Settings, call_id: str) -> bool:
                 "text": {"body": f"A recording was generated for call {call_id}."},
             },
         )
-        message.raise_for_status()
+        if message.is_error:
+            try:
+                details = message.json().get("error", {})
+                error_code = details.get("code", "unknown")
+                error_message = details.get("message", message.text)
+            except ValueError:
+                error_code = "unknown"
+                error_message = message.text
+            raise RuntimeError(f"WhatsApp API error {error_code}: {error_message}")
     return True

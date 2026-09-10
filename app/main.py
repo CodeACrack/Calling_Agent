@@ -124,6 +124,15 @@ async def vobiz_media(vobiz: WebSocket):
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
                 )
             ),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    silence_duration_ms=700,
+                ),
+                activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                turn_coverage=types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            ),
         )
         async with client.aio.live.connect(model="gemini-3.1-flash-live-preview", config=live_config) as gemini:
             await gemini.send_client_content(

@@ -21,7 +21,7 @@ The agent identifies itself as AI, announces recording, speaks English/Hindi, ca
 3. Deploy this service behind a public HTTPS/WSS domain, then set `PUBLIC_BASE_URL` in `.env`.
 4. Add an OpenAI API key to `.env` (never paste it into chat or commit it).
 5. Enter the service URL in Vobiz using its exact documented field. The route is `/vobiz/incoming`; media is `/vobiz/media`.
-6. Create a WhatsApp Business Cloud API app, then put the access token, phone-number ID, and **your own WhatsApp number** in `.env`. The agent uploads the recording to Meta and messages it to that number after every call.
+6. Create a WhatsApp Business Cloud API app, then put the access token, phone-number ID, and **your own WhatsApp number** in `.env`. The agent sends a text notification to that number after every call. Use a valid token generated for the same Meta business account and phone-number ID; short-lived test tokens expire and commonly cause `401 Unauthorized` responses.
 
 For a production WhatsApp Business number, Meta may require an approved message template unless your number has an open 24-hour customer-service conversation with that WhatsApp business number. Use your account's test recipient while developing, then configure a template-based notification if Meta requires it.
 
