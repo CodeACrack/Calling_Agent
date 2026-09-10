@@ -88,7 +88,6 @@ async def incoming_call(request: Request, x_vobiz_secret: str | None = Header(de
     websocket_url = f"{websocket_base_url}/vobiz/media"
     xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Speak voice="WOMAN" language="en-IN">Hello, I am Pujitha's AI assistant. She is unavailable to take calls right now. This call is being recorded and the recording will be sent to her. What is the purpose of your call?</Speak>
   <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">{websocket_url}</Stream>
 </Response>'''
     return Response(content=xml, media_type="application/xml")
@@ -127,6 +126,20 @@ async def vobiz_media(vobiz: WebSocket):
             ),
         )
         async with client.aio.live.connect(model="gemini-3.1-flash-live-preview", config=live_config) as gemini:
+            await gemini.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[
+                        types.Part(
+                            text=(
+                                "Start the conversation now with the opening greeting from your instructions. "
+                                "Speak directly to the caller, then wait for their answer."
+                            )
+                        )
+                    ],
+                ),
+                turn_complete=True,
+            )
 
             async def carrier_to_openai():
                 nonlocal call_id, stream_id, inbound_encoding, inbound_sample_rate, media_frames, recorder
